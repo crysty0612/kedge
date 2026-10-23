@@ -75,19 +75,19 @@ class ConfigManager:
         if cwd != Path("/"):
             for name in self.CONFIG_NAMES:
                 candidate = cwd / name
-                if candidate.is_file():
+                if candidate.is_file() and os.access(candidate, os.R_OK):
                     return candidate.resolve()
 
         # Check system directory (/etc/kedge)
         for name in self.CONFIG_NAMES:
             candidate = self.SYSTEM_CONFIG_DIR / name
-            if candidate.is_file():
+            if candidate.is_file() and os.access(candidate, os.R_OK):
                 return candidate.resolve()
 
         # Check global user directory (~/.config/kedge)
         for name in self.CONFIG_NAMES:
             candidate = self.GLOBAL_CONFIG_DIR / name
-            if candidate.is_file():
+            if candidate.is_file() and os.access(candidate, os.R_OK):
                 return candidate.resolve()
 
         # Check invoking user home if running under sudo
@@ -96,11 +96,11 @@ class ConfigManager:
             user_cfg_dir = Path(f"/home/{sudo_user}/.config/kedge")
             for name in self.CONFIG_NAMES:
                 candidate = user_cfg_dir / name
-                if candidate.is_file():
+                if candidate.is_file() and os.access(candidate, os.R_OK):
                     return candidate.resolve()
 
         # Safe default fallback
-        if os.geteuid() == 0 or self.SYSTEM_CONFIG_DIR.is_dir():
+        if os.geteuid() == 0 or (self.SYSTEM_CONFIG_DIR.is_dir() and os.access(self.SYSTEM_CONFIG_DIR, os.W_OK)):
             return self.SYSTEM_CONFIG_DIR / "kedge.yaml"
         if cwd != Path("/"):
             return cwd / ".kedge.yaml"
@@ -115,7 +115,12 @@ class ConfigManager:
             self.data = copy.deepcopy(DEFAULT_CONFIG)
             return self.data
 
-        content = self.config_path.read_text(encoding="utf-8")
+        try:
+            content = self.config_path.read_text(encoding="utf-8")
+        except (OSError, PermissionError):
+            self.data = copy.deepcopy(DEFAULT_CONFIG)
+            return self.data
+
         if self.config_path.suffix in [".yaml", ".yml"]:
             try:
                 import yaml
@@ -139,7 +144,9 @@ class ConfigManager:
         content = self._dump_simple_yaml(self.data)
         self.config_path.write_text(content, encoding="utf-8")
         try:
-            os.chmod(self.config_path, 0o600)
+            # System configs (/etc/kedge) should be world-readable (0644); user configs 0600
+            file_mode = 0o644 if str(self.config_path).startswith("/etc/kedge") else 0o600
+            os.chmod(self.config_path, file_mode)
         except OSError:
             pass
 

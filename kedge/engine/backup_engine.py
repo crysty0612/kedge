@@ -45,6 +45,34 @@ EXCLUDE_PATTERNS = [
     "*filters*",
     "*.bak*",
     "*.tmp",
+    # AI weights & huge model formats
+    "*.safetensors",
+    "*.gguf",
+    "*.bin",
+    "*.pt",
+    "*.pth",
+    "*.onnx",
+    "*.ckpt",
+    # Disk images & bulk archives
+    "*.iso",
+    "*.img",
+    "*.qcow2",
+    "*.vmdk",
+    "*.vdi",
+    "*.tar.gz",
+    "*.tar",
+    "*.zip",
+    # Previews & thumbnails
+    "*thumbnails*",
+    "*thumbs*",
+    "*previews*",
+    "*preview*",
+    # Download partials & user bulk directories
+    "*.part",
+    "*.crdownload",
+    "*/data/*",
+    "*/storage/cache/*",
+    "*/storage/backup/*",
 ]
 
 
@@ -69,6 +97,29 @@ class BackupEngine:
         else:
             local_path = storage_cfg.get("local_path", "/var/backups/kedge")
             return LocalStorageProvider(target_dir=local_path)
+
+    @staticmethod
+    def get_optimal_staging_parent(workspace_root: Path, target_storage_path: Optional[str] = None) -> Path:
+        candidates = []
+        if workspace_root.is_dir():
+            candidates.append(workspace_root)
+        if target_storage_path and Path(target_storage_path).is_dir():
+            candidates.append(Path(target_storage_path))
+        if Path("/var/tmp").is_dir():
+            candidates.append(Path("/var/tmp"))
+        candidates.append(Path(tempfile.gettempdir()))
+
+        best_cand = Path(tempfile.gettempdir())
+        max_free = 0
+        for cand in candidates:
+            try:
+                stat = shutil.disk_usage(cand)
+                if stat.free > max_free:
+                    max_free = stat.free
+                    best_cand = cand
+            except OSError:
+                continue
+        return best_cand
 
     def run(self, dry_run: bool = False, skip_git: bool = False, skip_host: bool = False) -> Tuple[bool, str]:
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
@@ -97,8 +148,12 @@ class BackupEngine:
             else:
                 UI.info("Workspace root is not a git repository. Skipping git sync.")
 
-        # Staging directory for consistent assembly
-        with tempfile.TemporaryDirectory(prefix="kedge_stage_") as stage_dir_str:
+        # Staging directory on the filesystem with the largest free disk space
+        optimal_stage_parent = self.get_optimal_staging_parent(
+            workspace_root,
+            self.config.get("storage", {}).get("local_path"),
+        )
+        with tempfile.TemporaryDirectory(prefix="kedge_stage_", dir=str(optimal_stage_parent)) as stage_dir_str:
             stage_dir = Path(stage_dir_str)
             db_stage_dir = stage_dir / "sqlite_dumps"
             host_stage_dir = stage_dir / "host_state"
@@ -221,6 +276,11 @@ class BackupEngine:
                 UI.success("Dry run completed. Staging and backup checks passed.")
                 return True, "Dry-run completed successfully"
 
+            # Pre-flight staging disk space check
+            stage_free = shutil.disk_usage(stage_dir).free
+            if stage_free < 1024 * 1024 * 1024:
+                return False, f"Insufficient disk space in staging directory ({UI.format_bytes(stage_free)} free). At least 1,000 MB required."
+
             # Build tarball
             self._create_tarball(
                 tar_path=tar_path,
@@ -284,7 +344,13 @@ class BackupEngine:
     ) -> None:
         exclude_set = set(exclude_db_rel_paths)
 
+        MAX_SINGLE_FILE_BYTES = 200 * 1024 * 1024  # 200 MB limit per individual file
+
         def tar_filter(tarinfo: tarfile.TarInfo) -> Optional[tarfile.TarInfo]:
+            # Filter out single files exceeding size ceiling (model weights, raw video dumps, disk images)
+            if tarinfo.size > MAX_SINGLE_FILE_BYTES:
+                return None
+
             # Filter ephemeral auxiliary patterns
             for pat in EXCLUDE_PATTERNS:
                 if pat.startswith("*") and pat.endswith("*"):
@@ -294,7 +360,11 @@ class BackupEngine:
                 elif pat.startswith("*"):
                     if tarinfo.name.endswith(pat[1:]):
                         return None
-                elif tarinfo.name == pat or tarinfo.name.endswith("/" + pat):
+                elif pat.endswith("*"):
+                    term = pat[:-1]
+                    if tarinfo.name.startswith(term) or f"/{term}" in tarinfo.name:
+                        return None
+                elif pat == tarinfo.name or tarinfo.name.endswith("/" + pat) or f"/{pat}/" in tarinfo.name:
                     return None
 
             # Filter raw database paths from direct volume stream

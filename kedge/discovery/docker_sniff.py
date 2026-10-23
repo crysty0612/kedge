@@ -19,6 +19,9 @@ EPHEMERAL_MOUNT_PREFIXES = (
     "/etc/localtime",
     "/etc/resolv.conf",
     "/etc/hosts",
+    "/var/cache",
+    "/tmp",
+    "/var/tmp",
 )
 
 BULK_MEDIA_KEYWORDS = {
@@ -40,6 +43,26 @@ BULK_MEDIA_KEYWORDS = {
     "recordings",
     "roms",
     "games",
+    "storage",
+    "cache",
+    "caches",
+    "model",
+    "models",
+    "weights",
+    "thumbnails",
+    "thumbs",
+    "preview",
+    "previews",
+    "blobs",
+    "chunks",
+    "huggingface",
+    "lemonade",
+    "ollama",
+    "vllm",
+    "checkpoints",
+    "dataset",
+    "datasets",
+    "files",
 }
 
 
@@ -184,6 +207,10 @@ class DockerSniffer:
         if len(src_p.parts) <= 2 and src_p.parts[0] == "/":
             return True
 
+        # Check if path contains .cache or cache
+        if "/.cache" in src or "/cache" in src:
+            return True
+
         src_parts = [p.lower() for p in src_p.parts]
         dst_parts = [p.lower() for p in dst_p.parts]
 
@@ -193,4 +220,12 @@ class DockerSniffer:
         for p in dst_parts:
             if p in BULK_MEDIA_KEYWORDS:
                 return True
+
+        # Check for media/storage subdirectories
+        src_lower = src.lower()
+        dst_lower = dst.lower()
+        for kw in BULK_MEDIA_KEYWORDS:
+            if f"/{kw}/" in f"/{src_lower}/" or f"/{kw}/" in f"/{dst_lower}/":
+                return True
+
         return False
