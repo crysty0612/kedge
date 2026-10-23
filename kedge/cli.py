@@ -718,11 +718,11 @@ def check_and_elevate_privileges(command: str, non_interactive: bool = False) ->
     # Check if sudo can execute passwordlessly (e.g., registered via /etc/sudoers.d/kedge)
     sudo_check = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if sudo_check.returncode == 0:
-        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        cmd_args = ["sudo", self_bin] + sys.argv[1:]
         try:
             os.execvp("sudo", cmd_args)
         except OSError:
-            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            cmd_args = ["sudo", sys.executable, "-m", "kedge"] + sys.argv[1:]
             os.execvp("sudo", cmd_args)
 
     if command == "init":
@@ -736,18 +736,18 @@ def check_and_elevate_privileges(command: str, non_interactive: bool = False) ->
             except (KeyboardInterrupt, EOFError):
                 print()
                 sys.exit(1)
-        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        cmd_args = ["sudo", self_bin] + sys.argv[1:]
         try:
             os.execvp("sudo", cmd_args)
         except OSError:
-            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            cmd_args = ["sudo", sys.executable, "-m", "kedge"] + sys.argv[1:]
             os.execvp("sudo", cmd_args)
     else:
-        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        cmd_args = ["sudo", self_bin] + sys.argv[1:]
         try:
             os.execvp("sudo", cmd_args)
         except OSError:
-            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            cmd_args = ["sudo", sys.executable, "-m", "kedge"] + sys.argv[1:]
             os.execvp("sudo", cmd_args)
 
 
