@@ -30,6 +30,12 @@ class UI:
 
     @classmethod
     def banner(cls) -> None:
+        try:
+            from kedge import __version__
+            ver = __version__
+        except Exception:
+            ver = "1.0.1"
+
         art = f"""{cls.CYAN}{cls.BOLD}
    __  __          _            
   / / / /__   ____| | ____  ___ 
@@ -38,7 +44,7 @@ class UI:
 \\/|_| \\___/ \\__,_/ \\__, /\\___/ 
                   /____/        {cls.RESET}
 {cls.BOLD}Autonomous GitOps & Resilient State Fabric Engine{cls.RESET}
-{cls.GRAY}Version 1.0.0 • No hardcoded paths • Multi-Cloud & Homelab{cls.RESET}
+{cls.GRAY}Version {ver} • No hardcoded paths • Multi-Cloud & Homelab{cls.RESET}
 """
         print(art)
 

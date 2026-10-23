@@ -2,8 +2,10 @@
 Safe subprocess execution and binary verification utilities.
 """
 
+import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 
@@ -48,11 +50,37 @@ class Runner:
 
         target_cmd = cmd_str if shell else cmd_list
 
+        run_env = env.copy() if env is not None else os.environ.copy()
+
+        # Bridge user SSH and GitHub CLI credentials when running elevated under sudo
+        if os.geteuid() == 0 and "SUDO_USER" in run_env:
+            sudo_user = run_env["SUDO_USER"]
+            user_home = Path(f"/home/{sudo_user}")
+            if user_home.is_dir():
+                if "GH_CONFIG_DIR" not in run_env:
+                    u_gh = user_home / ".config" / "gh"
+                    r_gh = Path("/root/.config/gh/hosts.yml")
+                    if u_gh.is_dir() and not r_gh.is_file():
+                        run_env["GH_CONFIG_DIR"] = str(u_gh)
+
+                if "GIT_SSH_COMMAND" not in run_env:
+                    u_ssh = user_home / ".ssh"
+                    if u_ssh.is_dir():
+                        ssh_keys: List[str] = []
+                        for kname in ["id_ed25519", "id_rsa", "id_ecdsa"]:
+                            kp = u_ssh / kname
+                            if kp.is_file():
+                                ssh_keys.append(f"-i {kp}")
+                        ssh_cfg = u_ssh / "config"
+                        cfg_part = f"-F {ssh_cfg} " if ssh_cfg.is_file() else ""
+                        if ssh_keys:
+                            run_env["GIT_SSH_COMMAND"] = f"ssh {cfg_part}{' '.join(ssh_keys)} -o StrictHostKeyChecking=accept-new"
+
         try:
             res = subprocess.run(
                 target_cmd,
                 cwd=cwd,
-                env=env,
+                env=run_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

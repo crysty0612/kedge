@@ -170,12 +170,16 @@ class BackupEngine:
                     dest_s = secrets_stage_dir / stack_name / rel_s
                     dest_s.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(sf, dest_s)
+                    stat = sf.stat()
                     archive_path = f"manifest/secrets/{stack_name}/{rel_s}"
                     secret_mappings.append({
                         "stack_name": stack_name,
                         "host_workdir": str(s_dir),
                         "filename": rel_s,
                         "archive_path": archive_path,
+                        "uid": stat.st_uid,
+                        "gid": stat.st_gid,
+                        "mode": stat.st_mode,
                     })
                     UI.info(f"Preserved secret: {stack_name}/{rel_s}")
 

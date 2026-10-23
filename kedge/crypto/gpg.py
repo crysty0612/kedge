@@ -24,6 +24,18 @@ class CryptoEngine:
                 os.chmod(key_path, 0o600)
             except OSError:
                 pass
+
+            sudo_user = os.environ.get("SUDO_USER")
+            if sudo_user and sudo_user != "root":
+                try:
+                    import pwd
+                    pw = pwd.getpwnam(sudo_user)
+                    if str(key_path).startswith(f"/home/{sudo_user}"):
+                        os.chown(key_path, pw.pw_uid, pw.pw_gid)
+                        if key_path.parent.exists():
+                            os.chown(key_path.parent, pw.pw_uid, pw.pw_gid)
+                except Exception:
+                    pass
         return key_path
 
     @classmethod

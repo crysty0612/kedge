@@ -125,6 +125,8 @@ class RestoreEngine:
                     workspace_root.mkdir(parents=True, exist_ok=True)
                     tar.extractall(path=workspace_root)
                 else:
+                    dirs_to_restore: List[Tuple[Path, int, int, int, float]] = []
+
                     # Live host restoration: restore volumes to actual host disks and secrets to stack workdirs
                     for m in members:
                         if m.name.startswith("volumes/"):
@@ -132,6 +134,7 @@ class RestoreEngine:
                             dest_path = Path("/" + rel)
                             if m.isdir():
                                 dest_path.mkdir(parents=True, exist_ok=True)
+                                dirs_to_restore.append((dest_path, m.uid, m.gid, m.mode, m.mtime))
                             elif m.isfile():
                                 dest_path.parent.mkdir(parents=True, exist_ok=True)
                                 extracted_stream = tar.extractfile(m)
@@ -139,7 +142,15 @@ class RestoreEngine:
                                     with open(dest_path, "wb") as df:
                                         shutil.copyfileobj(extracted_stream, df)
                                     try:
+                                        os.chown(dest_path, m.uid, m.gid)
+                                    except OSError:
+                                        pass
+                                    try:
                                         dest_path.chmod(m.mode)
+                                    except OSError:
+                                        pass
+                                    try:
+                                        os.utime(dest_path, (m.mtime, m.mtime))
                                     except OSError:
                                         pass
                         elif m.name.startswith("manifest/secrets/"):
@@ -152,8 +163,20 @@ class RestoreEngine:
                                     if extracted_stream:
                                         with open(dest_path, "wb") as df:
                                             shutil.copyfileobj(extracted_stream, df)
+                                        s_uid = sm.get("uid")
+                                        s_gid = sm.get("gid")
+                                        s_mode = sm.get("mode", 0o600)
+                                        if s_uid is not None and s_gid is not None:
+                                            try:
+                                                os.chown(dest_path, s_uid, s_gid)
+                                            except OSError:
+                                                pass
                                         try:
-                                            dest_path.chmod(0o600)
+                                            dest_path.chmod(s_mode)
+                                        except OSError:
+                                            pass
+                                        try:
+                                            os.utime(dest_path, (m.mtime, m.mtime))
                                         except OSError:
                                             pass
                                     found_secret = True
@@ -162,6 +185,21 @@ class RestoreEngine:
                                 tar.extract(m, path=workspace_root)
                         else:
                             tar.extract(m, path=workspace_root)
+
+                    # Restore original ownership and directory permissions in reverse order
+                    for d_path, d_uid, d_gid, d_mode, d_mtime in reversed(dirs_to_restore):
+                        try:
+                            os.chown(d_path, d_uid, d_gid)
+                        except OSError:
+                            pass
+                        try:
+                            d_path.chmod(d_mode)
+                        except OSError:
+                            pass
+                        try:
+                            os.utime(d_path, (d_mtime, d_mtime))
+                        except OSError:
+                            pass
 
             # Step 4: Verify Database Integrity in Restored Destination
             UI.step("[4/4] Validating Integrity of Restored Databases")

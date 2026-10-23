@@ -462,6 +462,7 @@ def cmd_init(
     ws = Path(target_root_str).expanduser().resolve()
     ws.mkdir(parents=True, exist_ok=True)
     cfg_mgr.data["workspace_root"] = str(ws)
+    cfg_mgr.set_config_location(ws / ".kedge.yaml")
     UI.success(f"Workspace set to: {ws}")
 
     # Step 2: Remote Orchestrator Git Strategy (Inbound GitOps & Outbound Release Target)
@@ -548,6 +549,9 @@ def cmd_init(
     # Step 4: Cryptographic Key Setup
     UI.step("Step 4: Cryptographic Key Setup (AES-256)")
     default_key = cfg_mgr.data.get("encryption", {}).get("key_file", "~/.config/kedge/kedge.key")
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root" and default_key.startswith("~"):
+        default_key = f"/home/{sudo_user}/.config/kedge/kedge.key"
     key_file_input = default_key
     if not non_interactive and sys.stdin.isatty():
         try:
@@ -624,6 +628,67 @@ def cmd_init(
     cfg_path = cfg_mgr.save()
     UI.success(f"Configuration saved to: {cfg_path}")
 
+    # Mirror active system config to /etc/kedge/kedge.yaml
+    try:
+        etc_dir = Path("/etc/kedge")
+        etc_dir.mkdir(parents=True, exist_ok=True)
+        etc_cfg = etc_dir / "kedge.yaml"
+        if etc_cfg.resolve() != cfg_path.resolve():
+            shutil.copy2(cfg_path, etc_cfg)
+            try:
+                os.chmod(etc_cfg, 0o600)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+    # Register passwordless sudo elevation for invoking user so all subsequent kedge commands run as root seamlessly
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        try:
+            sudoers_dir = Path("/etc/sudoers.d")
+            if sudoers_dir.is_dir():
+                rule_file = sudoers_dir / "kedge"
+                kedge_bin = shutil.which("kedge") or "/usr/local/bin/kedge"
+                user_bin = f"/home/{sudo_user}/.local/bin/kedge"
+                rule_content = (
+                    f"# Kedge privilege elevation rule (Managed by Kedge)\n"
+                    f"{sudo_user} ALL=(ALL) NOPASSWD: {kedge_bin}, /usr/local/bin/kedge, {user_bin}, {sys.executable} -m kedge, {sys.executable} -m kedge *\n"
+                )
+                temp_rule = Path("/tmp/kedge_sudoers.tmp")
+                temp_rule.write_text(rule_content, encoding="utf-8")
+                os.chmod(temp_rule, 0o440)
+                vis_res = Runner.run(["visudo", "-c", "-f", str(temp_rule)])
+                if vis_res.ok:
+                    shutil.move(temp_rule, rule_file)
+                    os.chmod(rule_file, 0o440)
+                    UI.info(f"Registered seamless root elevation for '{sudo_user}' in /etc/sudoers.d/kedge")
+                else:
+                    temp_rule.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # Ensure system git allows safe directory access for both root and user
+    Runner.run(["git", "config", "--system", "--add", "safe.directory", "*"])
+
+    # Ensure workspace directory and git structure are owned by the user (never locked as root-only)
+    if sudo_user and sudo_user != "root":
+        try:
+            import pwd
+            pw = pwd.getpwnam(sudo_user)
+            for root_dir, dirs, files in os.walk(ws):
+                try:
+                    os.chown(root_dir, pw.pw_uid, pw.pw_gid)
+                except OSError:
+                    pass
+                for f in files:
+                    try:
+                        os.chown(os.path.join(root_dir, f), pw.pw_uid, pw.pw_gid)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
     # Step 8: Initialize & Publish Declarative Infrastructure to Remote Git Origin
     if curr_remote and curr_remote != "skip":
         UI.step("Step 8: Publishing Declarative Infrastructure to Remote Git Origin")
@@ -638,6 +703,53 @@ def cmd_init(
     return 0
 
 
+def check_and_elevate_privileges(command: str, non_interactive: bool = False) -> None:
+    """
+    Ensures Kedge runs with root privileges.
+    Prompts the user during 'init', registers passwordless elevation, and seamlessly
+    elevates subsequent commands via sudo.
+    """
+    if os.environ.get("KEDGE_NO_ELEVATE") == "1" or os.geteuid() == 0:
+        return
+
+    self_bin = shutil.which("kedge") or str(Path(sys.argv[0]).resolve())
+
+    # Check if sudo can execute passwordlessly (e.g., registered via /etc/sudoers.d/kedge)
+    sudo_check = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if sudo_check.returncode == 0:
+        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        try:
+            os.execvp("sudo", cmd_args)
+        except OSError:
+            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            os.execvp("sudo", cmd_args)
+
+    if command == "init":
+        print(f"\n{UI.YELLOW}{UI.BOLD}[!] Kedge requires root privileges to inspect and backup container volumes, databases, and system configurations across all disks.{UI.RESET}")
+        if not non_interactive and sys.stdin.isatty():
+            try:
+                confirm = input("Grant root privileges to continue? [Y/n]: ").strip().lower()
+                if confirm in ("n", "no"):
+                    print(f"{UI.RED}Kedge setup requires root privileges. Aborted.{UI.RESET}")
+                    sys.exit(1)
+            except (KeyboardInterrupt, EOFError):
+                print()
+                sys.exit(1)
+        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        try:
+            os.execvp("sudo", cmd_args)
+        except OSError:
+            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            os.execvp("sudo", cmd_args)
+    else:
+        cmd_args = ["sudo", "-E", self_bin] + sys.argv[1:]
+        try:
+            os.execvp("sudo", cmd_args)
+        except OSError:
+            cmd_args = ["sudo", "-E", sys.executable, "-m", "kedge"] + sys.argv[1:]
+            os.execvp("sudo", cmd_args)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -645,6 +757,8 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         sys.exit(0)
+
+    check_and_elevate_privileges(args.command, non_interactive=getattr(args, "non_interactive", False))
 
     cfg_mgr = ConfigManager(explicit_path=args.config)
 

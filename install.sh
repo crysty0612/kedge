@@ -97,16 +97,18 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo -e "Installing Kedge to: ${C_BOLD}${TARGET_BIN}${C_RESET}..."
-mkdir -p "$LIB_DIR"
-cp -r "$SCRIPT_DIR/kedge" "$LIB_DIR/"
+write_kedge_wrapper() {
+    local bin_dest="$1"
+    local lib_dest="$2"
+    mkdir -p "$(dirname "$bin_dest")" "$lib_dest"
+    cp -r "$SCRIPT_DIR/kedge" "$lib_dest/"
 
-cat << EOF > "$TARGET_BIN"
+    cat << EOF > "$bin_dest"
 #!/usr/bin/env python3
 import sys
 from pathlib import Path
 
-lib_path = "${LIB_DIR}"
+lib_path = "${lib_dest}"
 if lib_path not in sys.path:
     sys.path.insert(0, lib_path)
 
@@ -115,8 +117,22 @@ from kedge.cli import main
 if __name__ == "__main__":
     main()
 EOF
+    chmod +x "$bin_dest" 2>/dev/null || true
+}
 
-chmod +x "$TARGET_BIN" 2>/dev/null || true
+echo -e "Installing Kedge to: ${C_BOLD}${TARGET_BIN}${C_RESET}..."
+write_kedge_wrapper "$TARGET_BIN" "$LIB_DIR"
+
+# If running under sudo, also update the invoking user's ~/.local/bin if present
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    USER_BIN="/home/${SUDO_USER}/.local/bin/kedge"
+    USER_LIB="/home/${SUDO_USER}/.local/lib/kedge"
+    if [ -d "/home/${SUDO_USER}/.local/bin" ] || [ -f "$USER_BIN" ]; then
+        echo -e "Synchronizing user local path: ${C_BOLD}${USER_BIN}${C_RESET}..."
+        write_kedge_wrapper "$USER_BIN" "$USER_LIB"
+        chown -R "${SUDO_USER}:${SUDO_USER}" "$USER_BIN" "$USER_LIB" 2>/dev/null || true
+    fi
+fi
 
 echo -e "\n${C_GREEN}${C_BOLD}[✓] Kedge successfully installed!${C_RESET}"
 echo -e "To configure and onboard this machine, run: ${C_CYAN}${C_BOLD}kedge init${C_RESET}"

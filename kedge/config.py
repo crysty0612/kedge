@@ -7,7 +7,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -55,31 +55,56 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 class ConfigManager:
     CONFIG_NAMES = [".kedge.yaml", ".kedge.yml", ".kedge.json"]
     GLOBAL_CONFIG_DIR = Path.home() / ".config" / "kedge"
+    SYSTEM_CONFIG_DIR = Path("/etc/kedge")
 
     def __init__(self, explicit_path: Optional[str] = None):
         self.config_path: Path = self._resolve_config_path(explicit_path)
         self.data: Dict[str, Any] = {}
         self.load()
 
+    def set_config_location(self, new_path: Union[str, Path]) -> None:
+        """Update active configuration file path dynamically (e.g. after setting workspace)."""
+        self.config_path = Path(new_path).expanduser().resolve()
+
     def _resolve_config_path(self, explicit_path: Optional[str] = None) -> Path:
         if explicit_path:
             return Path(explicit_path).expanduser().resolve()
 
-        # Check local directory first
+        # Check local directory first (excluding filesystem root '/')
         cwd = Path.cwd()
+        if cwd != Path("/"):
+            for name in self.CONFIG_NAMES:
+                candidate = cwd / name
+                if candidate.is_file():
+                    return candidate.resolve()
+
+        # Check system directory (/etc/kedge)
         for name in self.CONFIG_NAMES:
-            candidate = cwd / name
+            candidate = self.SYSTEM_CONFIG_DIR / name
             if candidate.is_file():
                 return candidate.resolve()
 
-        # Check global user directory
+        # Check global user directory (~/.config/kedge)
         for name in self.CONFIG_NAMES:
             candidate = self.GLOBAL_CONFIG_DIR / name
             if candidate.is_file():
                 return candidate.resolve()
 
-        # Default fallback
-        return cwd / ".kedge.yaml"
+        # Check invoking user home if running under sudo
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user and sudo_user != "root":
+            user_cfg_dir = Path(f"/home/{sudo_user}/.config/kedge")
+            for name in self.CONFIG_NAMES:
+                candidate = user_cfg_dir / name
+                if candidate.is_file():
+                    return candidate.resolve()
+
+        # Safe default fallback
+        if os.geteuid() == 0 or self.SYSTEM_CONFIG_DIR.is_dir():
+            return self.SYSTEM_CONFIG_DIR / "kedge.yaml"
+        if cwd != Path("/"):
+            return cwd / ".kedge.yaml"
+        return self.GLOBAL_CONFIG_DIR / "kedge.yaml"
 
     @property
     def exists(self) -> bool:
@@ -117,6 +142,18 @@ class ConfigManager:
             os.chmod(self.config_path, 0o600)
         except OSError:
             pass
+
+        # If running as root via sudo, maintain user ownership for user paths
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user and sudo_user != "root" and os.geteuid() == 0:
+            try:
+                import pwd
+                pw = pwd.getpwnam(sudo_user)
+                if str(self.config_path).startswith(f"/home/{sudo_user}"):
+                    os.chown(self.config_path, pw.pw_uid, pw.pw_gid)
+            except Exception:
+                pass
+
         return self.config_path
 
     def get_value(self, key_path: str) -> Any:

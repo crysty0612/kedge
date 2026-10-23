@@ -46,6 +46,22 @@ class TestConfigCommand(unittest.TestCase):
         self.assertEqual(code_reset, 0)
         self.assertEqual(self.cfg_mgr.get_value("retention"), 14)
 
+    def test_root_cwd_safety(self):
+        import os
+        from unittest.mock import patch
+        with patch.object(Path, "cwd", return_value=Path("/")), patch("os.geteuid", return_value=1000):
+            mgr = ConfigManager()
+            self.assertNotEqual(mgr.config_path, Path("/.kedge.yaml"))
+            self.assertFalse(str(mgr.config_path).startswith("/.kedge"))
+
+    def test_set_config_location(self):
+        new_loc = self.root / "subfolder" / ".kedge.yaml"
+        self.cfg_mgr.set_config_location(new_loc)
+        self.assertEqual(self.cfg_mgr.config_path, new_loc)
+        saved_path = self.cfg_mgr.save()
+        self.assertTrue(saved_path.is_file())
+        self.assertEqual(saved_path, new_loc)
+
 
 if __name__ == "__main__":
     unittest.main()
