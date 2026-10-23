@@ -170,10 +170,11 @@ Automated GitOps & state fabric repository.
         target_containers_dir = root_dir / containers_dir_name
         target_containers_dir.mkdir(parents=True, exist_ok=True)
 
-        for stack_name, s_info in stacks.items():
+        for stack_key, s_info in stacks.items():
             if not s_info.workdir or not Path(s_info.workdir).is_dir():
                 continue
 
+            stack_name = s_info.name
             workdir_path = Path(s_info.workdir)
             stack_dest_dir = target_containers_dir / stack_name
             stack_dest_dir.mkdir(parents=True, exist_ok=True)
