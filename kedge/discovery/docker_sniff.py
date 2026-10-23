@@ -157,47 +157,94 @@ class DockerSniffer:
                 stacks[workdir].container_ids.append(c_id)
                 stacks[workdir].container_names.append(c_name)
 
-        # 2. Inspect Mounts
+        # 2. Inspect Mounts (Named Volumes, Config Files, Config Dirs, and Host Mounts)
         mounts = container.get("Mounts", []) or []
         for mount in mounts:
-            if mount.get("Type") != "bind":
-                continue
-            if not mount.get("RW", False):
+            m_type = mount.get("Type")
+            if m_type not in ("bind", "volume"):
                 continue
 
             src = mount.get("Source", "")
             dst = mount.get("Destination", "")
+            vol_name = mount.get("Name", "")
+
+            # A. Named Docker Volumes (managed under /var/lib/docker/volumes/)
+            if m_type == "volume":
+                if not src and vol_name:
+                    src = f"/var/lib/docker/volumes/{vol_name}/_data"
+                if not Path(src).exists():
+                    continue
+                is_bulk = cls.is_bulk_media_mount(src, dst) or (bool(vol_name) and cls.is_bulk_media_mount(vol_name, dst))
+                volumes.append(
+                    DataVolume(
+                        source=src,
+                        destination=dst,
+                        container_name=c_name,
+                        is_rw=mount.get("RW", True),
+                        size_bytes=0,
+                        is_bulk_media=is_bulk,
+                        volume_type="named_volume",
+                    )
+                )
+                continue
+
+            # B. Host Bind Mounts
+            if not mount.get("RW", False):
+                continue
             if not src or not Path(src).exists():
                 continue
 
-            # Filter out system, root, and ephemeral mounts
+            # Filter out top-level system, root, and ephemeral mounts
             if src in ("/", "/root", "/var", "/usr", "/bin", "/sbin", "/boot", "/lib", "/lib64") or dst in ("/mnt/host", "/host", "/hostfs"):
                 continue
             if any(src.startswith(prefix) for prefix in EPHEMERAL_MOUNT_PREFIXES):
                 continue
 
-            # Calculate volume size safely
-            vol_size = 0
             src_path = Path(src)
-            try:
-                if src_path.is_file():
+            if src_path.is_file():
+                # Single container configuration file (e.g. config.yaml, *.cnf, *.ini, prometheus.yml)
+                vol_size = 0
+                try:
                     vol_size = src_path.stat().st_size
-            except OSError:
-                pass
-
-            # Detect if volume is a bulk media or storage pool mount
-            is_bulk = cls.is_bulk_media_mount(src, dst)
-
-            volumes.append(
-                DataVolume(
-                    source=src,
-                    destination=dst,
-                    container_name=c_name,
-                    is_rw=True,
-                    size_bytes=vol_size,
-                    is_bulk_media=is_bulk,
+                except OSError:
+                    pass
+                volumes.append(
+                    DataVolume(
+                        source=src,
+                        destination=dst,
+                        container_name=c_name,
+                        is_rw=True,
+                        size_bytes=vol_size,
+                        is_bulk_media=False,
+                        volume_type="config_file",
+                    )
                 )
-            )
+            else:
+                # Directory bind mount: distinguish dedicated config dirs vs bulk storage mounts
+                is_bulk = cls.is_bulk_media_mount(src, dst)
+                src_parts = [p.lower() for p in src_path.parts]
+                dst_parts = [p.lower() for p in Path(dst).parts]
+                is_cfg_dir = any(part in ("config", "conf", "conf.d", "etc", "letsencrypt", "certificates", "ssl") for part in src_parts + dst_parts)
+
+                if is_cfg_dir and not is_bulk:
+                    v_type = "config_dir"
+                    is_bulk = False
+                else:
+                    v_type = "host_mount"
+                    # Host storage mounts: replicate directory skeleton on restore, but skip packing raw bulk media
+                    is_bulk = True
+
+                volumes.append(
+                    DataVolume(
+                        source=src,
+                        destination=dst,
+                        container_name=c_name,
+                        is_rw=True,
+                        size_bytes=0,
+                        is_bulk_media=is_bulk,
+                        volume_type=v_type,
+                    )
+                )
 
     @classmethod
     def is_bulk_media_mount(cls, src: str, dst: str) -> bool:

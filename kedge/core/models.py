@@ -39,6 +39,7 @@ class DataVolume:
     is_rw: bool = True
     size_bytes: int = 0
     is_bulk_media: bool = False
+    volume_type: str = "config"  # "named_volume", "config_file", "config_dir", "host_mount"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class DataVolume:
             "is_rw": self.is_rw,
             "size_bytes": self.size_bytes,
             "is_bulk_media": self.is_bulk_media,
+            "volume_type": self.volume_type,
         }
 
 

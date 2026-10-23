@@ -254,6 +254,32 @@ class BackupEngine:
                         "is_in_workspace": in_ws,
                     })
 
+            # Record host mount skeletons to guarantee 100% server startup on restore
+            host_mount_skeletons: List[Dict[str, Any]] = []
+            try:
+                _, all_sniffed_vols, _ = DockerSniffer.sniff()
+                seen_hm_paths = set()
+                for sv in all_sniffed_vols:
+                    if sv.volume_type == "host_mount" or sv.is_bulk_media:
+                        if sv.source not in seen_hm_paths:
+                            seen_hm_paths.add(sv.source)
+                            src_p = Path(sv.source)
+                            if src_p.is_dir():
+                                try:
+                                    st = src_p.stat()
+                                    host_mount_skeletons.append({
+                                        "source": sv.source,
+                                        "destination": sv.destination,
+                                        "container_name": sv.container_name,
+                                        "uid": st.st_uid,
+                                        "gid": st.st_gid,
+                                        "mode": st.st_mode,
+                                    })
+                                except OSError:
+                                    pass
+            except Exception:
+                pass
+
             # Manifest metadata
             manifest = {
                 "tag": tag,
@@ -262,6 +288,7 @@ class BackupEngine:
                 "data_paths": [str(p) for p in data_paths],
                 "volume_mappings": volume_mappings,
                 "secret_mappings": secret_mappings,
+                "host_mount_skeletons": host_mount_skeletons,
                 "databases": [d.to_dict() for d in discovered_dbs],
                 "host_items_count": len(host_items),
             }

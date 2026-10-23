@@ -127,6 +127,18 @@ class RestoreEngine:
                 else:
                     dirs_to_restore: List[Tuple[Path, int, int, int, float]] = []
 
+                    # Reconstitute required host mount directories with exact ownership and permissions
+                    for hm in manifest_data.get("host_mount_skeletons", []):
+                        hm_path = Path(hm["source"])
+                        try:
+                            hm_path.mkdir(parents=True, exist_ok=True)
+                            if "uid" in hm and "gid" in hm:
+                                os.chown(hm_path, hm["uid"], hm["gid"])
+                            if "mode" in hm:
+                                hm_path.chmod(hm["mode"])
+                        except OSError:
+                            pass
+
                     # Live host restoration: restore volumes to actual host disks and secrets to stack workdirs
                     for m in members:
                         if m.name.startswith("volumes/"):
