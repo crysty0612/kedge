@@ -544,8 +544,12 @@ def cmd_init(
             confirm = input(f"Track these {len(discovered_stacks)} stacks under Kedge GitOps? [Y/n]: ").strip().lower()
             if confirm in ("n", "no"):
                 cfg_mgr.data["tracked_stacks"] = []
+            else:
+                SubmoduleOrchestrator.mirror_discovered_stacks(ws)
         except (KeyboardInterrupt, EOFError):
             print()
+    elif discovered_stacks:
+        SubmoduleOrchestrator.mirror_discovered_stacks(ws)
 
     # Step 4: Cryptographic Key Setup
     UI.step("Step 4: Cryptographic Key Setup (AES-256)")

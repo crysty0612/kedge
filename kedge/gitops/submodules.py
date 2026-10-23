@@ -4,8 +4,9 @@ Handles submodule tracking, automatic commits, synchronization, and bumps.
 """
 
 import json
+import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from kedge.core.models import StackInfo
 from kedge.core.runner import Runner
@@ -151,6 +152,41 @@ Automated GitOps & state fabric repository.
         return True, "Local GitOps orchestrator initialized."
 
     @classmethod
+    def mirror_discovered_stacks(cls, root_dir: Path, containers_dir_name: str = "containers") -> List[str]:
+        """
+        Discovers all container stacks across the host (CasaOS, custom directories, etc.)
+        and mirrors their declarative compose manifests into <root_dir>/containers/<stack_name>/
+        so the orchestrator Git repository maintains a complete declarative GitOps blueprint.
+        """
+        from kedge.discovery.docker_sniff import DockerSniffer
+        logs: List[str] = []
+        try:
+            stacks, _, _ = DockerSniffer.sniff()
+        except Exception:
+            return logs
+
+        target_containers_dir = root_dir / containers_dir_name
+        target_containers_dir.mkdir(parents=True, exist_ok=True)
+
+        for stack_name, s_info in stacks.items():
+            if not s_info.compose_file or not Path(s_info.compose_file).is_file():
+                continue
+
+            src_compose = Path(s_info.compose_file)
+            stack_dest_dir = target_containers_dir / stack_name
+            stack_dest_dir.mkdir(parents=True, exist_ok=True)
+
+            dest_compose = stack_dest_dir / "compose.yaml"
+            try:
+                # Copy or update compose manifest
+                shutil.copy2(src_compose, dest_compose)
+                logs.append(f"Mirrored declarative stack manifest: {stack_name} -> {containers_dir_name}/{stack_name}/compose.yaml")
+            except Exception:
+                pass
+
+        return logs
+
+    @classmethod
     def sync_submodules(cls, root_dir: Path, timestamp_str: str) -> Tuple[bool, List[str]]:
         logs: List[str] = []
         if not cls.is_git_repo(root_dir):
@@ -161,7 +197,12 @@ Automated GitOps & state fabric repository.
         if ok and init_msg:
             logs.append(init_msg)
 
-        # Check status and commit submodules
+        # Mirror all discovered host stacks into containers/ so they are tracked in git
+        mirror_logs = cls.mirror_discovered_stacks(root_dir)
+        for ml in mirror_logs:
+            logs.append(ml)
+
+        # Check status and commit submodules if any exist
         sync_cmd = f"""git submodule foreach --recursive '
             if [ -n "$(git status --porcelain)" ]; then
                 git add .
@@ -173,16 +214,16 @@ Automated GitOps & state fabric repository.
         if res.stdout.strip():
             logs.append(res.stdout.strip())
 
-        # Bump submodules / stage declarative updates in parent repo
+        # Bump submodules / stage declarative updates and mirrored stacks in parent repo
         Runner.run(["git", "add", ".gitmodules", "."], cwd=str(root_dir))
         diff_res = Runner.run(["git", "diff-index", "--quiet", "HEAD", "--"], cwd=str(root_dir))
         if not diff_res.ok:
             commit_res = Runner.run(
-                ["git", "commit", "-m", f"chore(orchestrator): bump submodules to {timestamp_str}"],
+                ["git", "commit", "-m", f"chore(orchestrator): sync container stacks & submodules ({timestamp_str})"],
                 cwd=str(root_dir),
             )
             if commit_res.ok:
-                logs.append("Committed updated configuration and submodule pointers in parent repository.")
+                logs.append("Committed updated configuration and container stacks in parent repository.")
                 Runner.run(["git", "push", "origin", "HEAD"], cwd=str(root_dir))
 
         return True, logs

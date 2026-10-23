@@ -59,8 +59,7 @@ class Runner:
             if user_home.is_dir():
                 if "GH_CONFIG_DIR" not in run_env:
                     u_gh = user_home / ".config" / "gh"
-                    r_gh = Path("/root/.config/gh/hosts.yml")
-                    if u_gh.is_dir() and not r_gh.is_file():
+                    if u_gh.is_dir():
                         run_env["GH_CONFIG_DIR"] = str(u_gh)
 
                 if "GIT_SSH_COMMAND" not in run_env:
