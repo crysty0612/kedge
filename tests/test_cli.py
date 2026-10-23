@@ -72,6 +72,16 @@ class TestCLI(unittest.TestCase):
         status_code = cmd_status(self.cfg_mgr)
         self.assertEqual(status_code, 0)
 
+    def test_elevation_check(self):
+        from kedge.cli import check_and_elevate_privileges
+        from unittest.mock import patch
+        # If root, should return immediately without error
+        with patch("os.geteuid", return_value=0):
+            check_and_elevate_privileges("status")
+        # If KEDGE_NO_ELEVATE=1, should return immediately
+        with patch.dict("os.environ", {"KEDGE_NO_ELEVATE": "1"}), patch("os.geteuid", return_value=1000):
+            check_and_elevate_privileges("init")
+
 
 if __name__ == "__main__":
     unittest.main()
