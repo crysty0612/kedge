@@ -155,8 +155,10 @@ Automated GitOps & state fabric repository.
     def mirror_discovered_stacks(cls, root_dir: Path, containers_dir_name: str = "containers") -> List[str]:
         """
         Discovers all container stacks across the host (CasaOS, custom directories, etc.)
-        and mirrors their declarative compose manifests into <root_dir>/containers/<stack_name>/
-        so the orchestrator Git repository maintains a complete declarative GitOps blueprint.
+        and mirrors their orchestration blueprints (compose files, Dockerfiles, entrypoints)
+        into <root_dir>/containers/<stack_name>/ alongside a .kedge-stack.json descriptor.
+        This provides a complete declarative GitOps blueprint in GitHub while ensuring
+        the live server working tree and relative mount paths remain completely untouched.
         """
         from kedge.discovery.docker_sniff import DockerSniffer
         logs: List[str] = []
@@ -169,20 +171,52 @@ Automated GitOps & state fabric repository.
         target_containers_dir.mkdir(parents=True, exist_ok=True)
 
         for stack_name, s_info in stacks.items():
-            if not s_info.compose_file or not Path(s_info.compose_file).is_file():
+            if not s_info.workdir or not Path(s_info.workdir).is_dir():
                 continue
 
-            src_compose = Path(s_info.compose_file)
+            workdir_path = Path(s_info.workdir)
             stack_dest_dir = target_containers_dir / stack_name
             stack_dest_dir.mkdir(parents=True, exist_ok=True)
 
-            dest_compose = stack_dest_dir / "compose.yaml"
+            # 1. Write the stack link descriptor connecting this Git blueprint to its host origin
+            stack_meta = {
+                "stack_name": stack_name,
+                "host_workdir": str(workdir_path.resolve()),
+                "compose_file": s_info.compose_file,
+                "is_git_repo": s_info.is_git_repo,
+                "git_remote": s_info.git_remote,
+                "containers": s_info.container_names,
+            }
             try:
-                # Copy or update compose manifest
-                shutil.copy2(src_compose, dest_compose)
-                logs.append(f"Mirrored declarative stack manifest: {stack_name} -> {containers_dir_name}/{stack_name}/compose.yaml")
+                (stack_dest_dir / ".kedge-stack.json").write_text(
+                    json.dumps(stack_meta, indent=2), encoding="utf-8"
+                )
             except Exception:
                 pass
+
+            # 2. Replicate orchestration files: compose files, Dockerfiles, and container configs
+            copied_files = 0
+            for item in workdir_path.iterdir():
+                # Never copy sensitive secrets or database files into Git-tracked container blueprints
+                if item.name.startswith((".env", ".")) or item.name.endswith((".key", ".pem", ".sqlite", ".db", ".log", ".tmp")):
+                    continue
+                if item.is_file():
+                    fname_lower = item.name.lower()
+                    # Capture compose files, Dockerfiles, and custom service entrypoints / build files
+                    if (
+                        "compose" in fname_lower
+                        or fname_lower.startswith("dockerfile")
+                        or fname_lower.endswith((".yaml", ".yml", ".json", ".conf", ".cnf", ".sh", ".py"))
+                    ):
+                        dest_f = stack_dest_dir / item.name
+                        try:
+                            shutil.copy2(item, dest_f)
+                            copied_files += 1
+                        except Exception:
+                            pass
+
+            if copied_files > 0:
+                logs.append(f"Synchronized orchestration blueprint for {stack_name} (linked to {workdir_path})")
 
         return logs
 

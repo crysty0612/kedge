@@ -242,11 +242,27 @@ class RestoreEngine:
                 if containers_dir.is_dir():
                     for stack_dir in containers_dir.iterdir():
                         if stack_dir.is_dir():
+                            meta_file = stack_dir / ".kedge-stack.json"
+                            target_workdir = stack_dir
+                            if meta_file.is_file():
+                                try:
+                                    s_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                                    hw = s_meta.get("host_workdir")
+                                    if hw:
+                                        target_workdir = Path(hw)
+                                        target_workdir.mkdir(parents=True, exist_ok=True)
+                                        # Replicate orchestration files into the native host workdir
+                                        for sf in stack_dir.iterdir():
+                                            if sf.is_file() and sf.name != ".kedge-stack.json":
+                                                shutil.copy2(sf, target_workdir / sf.name)
+                                except Exception:
+                                    pass
+
                             for cf in ["compose.yaml", "compose.yml", "docker-compose.yml"]:
-                                c_path = stack_dir / cf
+                                c_path = target_workdir / cf
                                 if c_path.is_file():
-                                    UI.info(f"Starting stack: {stack_dir.name}")
-                                    Runner.run(["docker", "compose", "-f", str(c_path), "up", "-d"])
+                                    UI.info(f"Starting stack: {stack_dir.name} in {target_workdir}")
+                                    Runner.run(["docker", "compose", "-f", str(c_path), "up", "-d"], cwd=str(target_workdir))
                                     break
 
             UI.success("Disaster recovery state restoration completed successfully.")
