@@ -57,10 +57,21 @@ class Runner:
             sudo_user = run_env["SUDO_USER"]
             user_home = Path(f"/home/{sudo_user}")
             if user_home.is_dir():
-                if "GH_CONFIG_DIR" not in run_env:
-                    u_gh = user_home / ".config" / "gh"
-                    if u_gh.is_dir():
-                        run_env["GH_CONFIG_DIR"] = str(u_gh)
+                if "GH_TOKEN" not in run_env and "GITHUB_TOKEN" not in run_env:
+                    # Dynamically extract token from the invoking user's gh session / keyring
+                    tok_check = subprocess.run(
+                        ["sudo", "-u", sudo_user, "gh", "auth", "token"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                        timeout=5,
+                    )
+                    if tok_check.returncode == 0 and tok_check.stdout.strip():
+                        run_env["GH_TOKEN"] = tok_check.stdout.strip()
+                    else:
+                        u_gh = user_home / ".config" / "gh"
+                        if u_gh.is_dir():
+                            run_env["GH_CONFIG_DIR"] = str(u_gh)
 
                 if "GIT_SSH_COMMAND" not in run_env:
                     u_ssh = user_home / ".ssh"
